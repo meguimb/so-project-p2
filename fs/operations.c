@@ -35,6 +35,22 @@ static bool valid_pathname(char const *name) {
 }
 
 int tfs_destroy_after_all_closed() {
+    // use free_open_file_entries and open_file_table
+    // verificar se há algum ficheiro aberto 
+    for (int i = 0; i < MAX_OPEN_FILES; i++){
+        /* while(!free_open_file_entries[i]==FREE){
+            pthread_cond_wait(variável de condição (que está na estrutura dos files ou globalmente numa arary), trinco);
+        }
+        */
+        // o que significa o trinco neste caso? estamos a dar unlock a quê? talvez em cada iteração do loop
+        // pôr pthread_cond_signal no tfs_close
+    }
+
+    // caso haja pelo menos 1, esperar que ele seja fechado
+    // no final de verificar que estão todos fechados, fazer tfs_destroy
+
+    // qualquer tentativa de tfs_open, retorna em -1 => nao necessita de espera
+    // implementar como?
     /* TO DO: implement this */
     return 0;
 }
@@ -115,6 +131,9 @@ static int _tfs_open_unsynchronized(char const *name, int flags) {
 int tfs_open(char const *name, int flags) {
     if (pthread_mutex_lock(&single_global_lock) != 0)
         return -1;
+    // verificar variável de condição
+    // ideia - adicionar à estrutura dos files uma condição para cada um
+    // só damos init qd se dá tfs_open e signal qd se dá tfs_close
     int ret = _tfs_open_unsynchronized(name, flags);
     if (pthread_mutex_unlock(&single_global_lock) != 0)
         return -1;
