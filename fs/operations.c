@@ -25,7 +25,7 @@ int tfs_init() {
 int tfs_destroy() {
     state_destroy();
     if (pthread_mutex_destroy(&single_global_lock) != 0) {
-        return -1;
+        return -1;  
     }
     return 0;
 }
@@ -37,11 +37,17 @@ static bool valid_pathname(char const *name) {
 int tfs_destroy_after_all_closed() {
     // use free_open_file_entries and open_file_table
     // verificar se há algum ficheiro aberto 
+    int inumber;
+    inode *inode;
+    open_file_entry_t *ofe;
     for (int i = 0; i < MAX_OPEN_FILES; i++){
-        /* while(!free_open_file_entries[i]==FREE){
-            pthread_cond_wait(variável de condição (que está na estrutura dos files ou globalmente numa arary), trinco);
+        while(!free_open_file_entries[i]==FREE){
+            inumber = open_file_table[i].of_inumber;
+            inode_t *inode = inode_get(inumber);
+            ofe = get_open_file_entry(i);
+            pthread_cond_wait(ofe-> , trinco);
         }
-        */
+        
         // o que significa o trinco neste caso? estamos a dar unlock a quê? talvez em cada iteração do loop
         // pôr pthread_cond_signal no tfs_close
     }
