@@ -6,6 +6,9 @@
 #include <string.h>
 
 static pthread_mutex_t single_global_lock;
+static int n_of_files_opened;
+static pthread_cond_t file_cond;
+static bool isBeingDestroyed;
 
 int tfs_init() {
     state_init();
@@ -18,7 +21,9 @@ int tfs_init() {
     if (root != ROOT_DIR_INUM) {
         return -1;
     }
-
+    n_of_files_opened = 0;
+    pthread_cond_init(&file_cond, NULL);
+    isBeingDestroyed = false;
     return 0;
 }
 
@@ -35,29 +40,17 @@ static bool valid_pathname(char const *name) {
 }
 
 int tfs_destroy_after_all_closed() {
-    // use free_open_file_entries and open_file_table
-    // verificar se há algum ficheiro aberto 
-    int inumber;
-    inode *inode;
-    open_file_entry_t *ofe;
-    for (int i = 0; i < MAX_OPEN_FILES; i++){
-        while(!free_open_file_entries[i]==FREE){
-            inumber = open_file_table[i].of_inumber;
-            inode_t *inode = inode_get(inumber);
-            ofe = get_open_file_entry(i);
-            pthread_cond_wait(ofe-> , trinco);
-        }
-        
-        // o que significa o trinco neste caso? estamos a dar unlock a quê? talvez em cada iteração do loop
-        // pôr pthread_cond_signal no tfs_close
+    if (pthread_mutex_lock(&single_global_lock)!=0){
+        return -1;
     }
-
-    // caso haja pelo menos 1, esperar que ele seja fechado
-    // no final de verificar que estão todos fechados, fazer tfs_destroy
-
-    // qualquer tentativa de tfs_open, retorna em -1 => nao necessita de espera
-    // implementar como?
-    /* TO DO: implement this */
+    isBeingDestroyed = true;
+    while (n_of_files_opened != 0){
+        pthread_cond_wait(&file_cond, &single_global_lock);
+    }
+    if (pthread_mutex_unlock(&single_global_lock)!=0){
+        return -1;
+    }
+    tfs_destroy();
     return 0;
 }
 
@@ -137,13 +130,16 @@ static int _tfs_open_unsynchronized(char const *name, int flags) {
 int tfs_open(char const *name, int flags) {
     if (pthread_mutex_lock(&single_global_lock) != 0)
         return -1;
-    // verificar variável de condição
-    // ideia - adicionar à estrutura dos files uma condição para cada um
-    // só damos init qd se dá tfs_open e signal qd se dá tfs_close
+    
+    if (isBeingDestroyed){
+        pthread_mutex_unlock(&single_global_lock);
+        return -1;
+    }
+    
     int ret = _tfs_open_unsynchronized(name, flags);
     if (pthread_mutex_unlock(&single_global_lock) != 0)
         return -1;
-
+    n_of_files_opened++;
     return ret;
 }
 
@@ -153,7 +149,8 @@ int tfs_close(int fhandle) {
     int r = remove_from_open_file_table(fhandle);
     if (pthread_mutex_unlock(&single_global_lock) != 0)
         return -1;
-
+    n_of_files_opened--;
+    pthread_cond_signal(&file_cond);
     return r;
 }
 
