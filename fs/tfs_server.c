@@ -12,5 +12,17 @@ int main(int argc, char **argv) {
 
     /* TO DO */
 
+    if (unlink(pipename)!= 0) {
+        exit(1);
+    }
+
+    if (mkfifo(pipename, 0640)!=0) {
+        exit(1);
+    }
+
+    if (tfs_init()!=0) {
+        exit(1);
+    }
+
     return 0;
 }
