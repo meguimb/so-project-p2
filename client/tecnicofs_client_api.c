@@ -2,7 +2,22 @@
 
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     /* TODO: Implement this */
-    return -1;
+    if (unlink(client_pipe_path)!=0) {
+        return -1;
+    }
+    if (mkfifo(client_pipe_path,0640)!=0) {
+        return -1;
+    }
+    int server = open(server_pipe_path, O_WRONLY);
+    if (server == -1) {
+        return -1;
+    }
+    
+    int client = open(client_pipe_path, O_RDONLY);
+    if (client == -1) {
+        return -1;
+    }
+    return 0;
 }
 
 int tfs_unmount() {
