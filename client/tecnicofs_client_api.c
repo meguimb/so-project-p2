@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-char *concatenate_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len);
-void *send_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len);
+// char *concatenate_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len);
+void *send_args(int opCode, void const *name, int session_id, int  flags, int fhandle, size_t len);
 
 int active_session_id;
 int pipe_client;
@@ -12,43 +12,59 @@ int pipe_server;
 char* _client_pipe_path;
 
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
+    printf("beginning of tfs_mount\n");
     if (unlink(client_pipe_path)!=0) {
+        printf("unlinking gone wrong\n");
         return -1;
     }
-    if (mkfifo(client_pipe_path,0640)!=0) {
+    printf("creating mkfifo\n");
+    if (mkfifo(client_pipe_path,0640) < 0) {
         return -1;
     }
+    printf("tfs_mount: opening pipe_server to read\n");
     pipe_server = open(server_pipe_path, O_WRONLY);
     if (pipe_server == -1) {
         return -1;
     }
-    strcpy(_client_pipe_path,client_pipe_path);
-    char* msg = TFS_OP_CODE_MOUNT;
-    strcat(msg," | ");
-    strcat(msg,client_pipe_path);
-    size_t len = strlen(msg);
-    if (write(pipe_server,msg,len) < 0) {
+    size_t str_len;
+    printf("send_args get void *\n");
+    void *send_req_str = send_args(TFS_OP_CODE_MOUNT, client_pipe_path, -1, -1, -1, 0);
+    str_len = strlen(send_req_str);
+    if (write(pipe_server, send_req_str, str_len) < 0) {
         return -1;
     }
+
+    // abrir pipe do cliente
     pipe_client = open(client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
     }
-    if (read(pipe_client,&active_session_id,1) < 0) {
+
+    // receber int de session_id do server
+    if (read(pipe_client, &active_session_id, sizeof(int)) < 0) {
         return -1;
     }
     return 0;
 }
 
 int tfs_unmount() {
-    char* msg = TFS_OP_CODE_UNMOUNT;
-    strcat(msg, " | ");
-    strcat(msg,active_session_id);
-    int len = 5; // mudar depois
-    if (write(pipe_server,msg,len) < 0) {
+    size_t str_len;
+    int ret_val;
+    void *send_req_str = send_args(TFS_OP_CODE_UNMOUNT, NULL, active_session_id, -1, -1, 0);
+    str_len = strlen(send_req_str);
+    if (write(pipe_server, send_req_str, str_len) < 0) {
         return -1;
     }
-    if (close(pipe) < 0) {
+    // receber int de retorno do server
+    if (read(pipe_client, &ret_val, sizeof(int)) < 0) {
+        return -1;
+    }
+    if (ret_val == -1){
+        printf("error with tfs_close ocurred\n");
+        return -1;
+    }
+    // fechar pipes
+    if (close(pipe_client) < 0) {
         return -1;
     }
     if (close(pipe_server) < 0) {
@@ -62,20 +78,57 @@ int tfs_unmount() {
 
 int tfs_open(char const *name, int flags) {
     /* TODO: Implement this */
-    return -1;
+    size_t str_len;
+    int ret_val;
+    void *send_req_str = send_args(TFS_OP_CODE_OPEN, name, active_session_id, flags, -1, 0);
+    str_len = strlen(send_req_str);
+    if (write(pipe_server, send_req_str, str_len) < 0) {
+        return -1;
+    }
+    pipe_client = open(_client_pipe_path, O_RDONLY);
+    if (pipe_client == -1) {
+        return -1;
+    }
+    if (read(pipe_client, &ret_val, sizeof(int)) < 0) {
+        return -1;
+    }
+    if (ret_val == -1){
+        printf("error with tfs_close ocurred\n");
+        return -1;
+    }
+    return 0;
 }
 
 int tfs_close(int fhandle) {
     /* TODO: Implement this */
-    return -1;
+    size_t str_len;
+    int ret_val;
+    void *send_req_str = send_args(TFS_OP_CODE_CLOSE, NULL, active_session_id, -1, fhandle, 0);
+    str_len = strlen(send_req_str);
+    if (write(pipe_server, send_req_str, str_len) < 0) {
+        return -1;
+    }
+    pipe_client = open(_client_pipe_path, O_RDONLY);
+    if (pipe_client == -1) {
+        return -1;
+    }
+    if (read(pipe_client, &ret_val, sizeof(int)) < 0) {
+        return -1;
+    }
+    if (ret_val == -1){
+        printf("error with tfs_close ocurred\n");
+        return -1;
+    }
+    return 0;
 }
 
 ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
     /* TODO: Implement this */
+    size_t str_len;
     int opCode = TFS_OP_CODE_WRITE, session_id = active_session_id;
-    char *send_req_str = concatenate_args(opCode, buffer, session_id, -1, fhandle, len);
-    len = strlen(send_req_str);
-    if (write(pipe_server, send_req_str, len) < 0) {
+    void *send_req_str = send_args(opCode, buffer, session_id, -1, fhandle, len);
+    str_len = strlen(send_req_str);
+    if (write(pipe_server, send_req_str, str_len) < 0) {
         return -1;
     }
     pipe_client = open(_client_pipe_path, O_RDONLY);
@@ -90,27 +143,35 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
     /* TODO: Implement this */
-    int len, opCode = TFS_OP_CODE_READ, session_id = active_session_id;
-    char *send_req_str = concatenate_args(opCode, NULL, session_id, -1, fhandle, len);
-    len = strlen(send_req_str);
-    if (write(pipe_server, send_req_str, len) < 0) {
+    size_t str_len, nOfBytesRead;
+    int opCode = TFS_OP_CODE_READ, session_id = active_session_id;
+    void *send_req_str = send_args(opCode, NULL, session_id, -1, fhandle, len);
+    // nao se manda o buffer para o server
+    str_len = strlen(send_req_str);
+    if (write(pipe_server, send_req_str, str_len) < 0) {
         return -1;
     }
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
     }
-    if (read(pipe_client,&active_session_id,1) < 0) {
+    if (read(pipe_client, &nOfBytesRead, sizeof(size_t)) < 0) {
         return -1;
     }
-    return -1;
+    if (nOfBytesRead == -1){
+        printf("error ocurred with tfs_read\n");
+    }
+    else if (nOfBytesRead == strlen(buffer)){
+        printf("everything went smoothyly\n");
+    }
+    return 0;
 }
 
 int tfs_shutdown_after_all_closed() {
     /* TODO: Implement this */
     return -1;
 }
-
+/*
 char *concatenate_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len){
     char str [40], int_to_char_buffer [10];
     char *send_msg_buffer;
@@ -149,28 +210,28 @@ char *concatenate_args(int opCode, char *name, int session_id, int  flags, int f
 
     return send_msg_buffer;
 }
-
-void *send_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len){
-    int str_len, pipe_buf_size;
+*/
+void *send_args(int opCode, void const *name, int session_id, int  flags, int fhandle, size_t len){
+    size_t str_len, pipe_buf_size;
     str_len = strlen(name)+1;
-    pipe_buf_size = sizeof(char) + sizeof(int) + sizeof(int) + sizeof(size_t) + str_len + sizeof(int); 
+    pipe_buf_size = (size_t) (sizeof(char) + sizeof(int) + sizeof(int) + sizeof(size_t) + str_len + sizeof(int)); 
     void *request_msg = malloc(pipe_buf_size);
 
     // concatenate opCode
-    memcpy(request_msg, opCode, sizeof(int));
+    memcpy(request_msg, &opCode, sizeof(int));
     request_msg += sizeof(int);
 
     // concatenate session_id
-    memcpy(request_msg, session_id, sizeof(int));
+    memcpy(request_msg, &session_id, sizeof(int));
     request_msg += sizeof(int);
     
     // concatenate fhandle if necessary
     if (fhandle != -1){
-        memcpy(request_msg, fhandle, sizeof(int));
+        memcpy(request_msg, &fhandle, sizeof(int));
         request_msg += sizeof(int);
     }
-    if (len != -1){
-        memcpy(request_msg, len, sizeof(size_t));
+    if (len != 0){
+        memcpy(request_msg, &len, sizeof(size_t));
         request_msg += sizeof(size_t);
     }
     if (name != NULL){
@@ -178,7 +239,7 @@ void *send_args(int opCode, char *name, int session_id, int  flags, int fhandle,
         request_msg += sizeof(str_len);
     }
     if (flags != -1){
-        memcpy(request_msg, flags, sizeof(int));
+        memcpy(request_msg, &flags, sizeof(int));
         request_msg += sizeof(int);
     }
     return request_msg;
