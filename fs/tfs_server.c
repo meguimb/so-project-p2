@@ -60,20 +60,36 @@ int main(int argc, char **argv) {
             if (read(pipe_server, readed, 40) < 0) {
                 return -1;
             }
-            strcpy(client_pipe_path, readed);
-            printf("client pipe name is: %s\n", readed);
+            memcpy(client_pipe_path, readed, strlen(readed)+1);
+            for (int i = 0; i < 40 && client_pipe_path[i] != '\0'; i++){
+                printf("%c/%d ", client_pipe_path[i], i);
+
+            }
+            client_pipe_path[strlen(readed)] = '\0';
+            printf("client pipe name is: -%s-\n", client_pipe_path);
+            printf("length is %ld\n", strlen(client_pipe_path));
             printf("request read from server\n");
-            // pipe_client = open(client_pipe_path, O_WRONLY);
+            pipe_client = open(client_pipe_path, O_WRONLY);
+            /*
             while (true){
-                if (open(client_pipe_path, O_WRONLY) < 0 && errno == ENOENT){
+                int i = open(readed, O_WRONLY);
+                if (i==0){
+                    break;
+                }
+                if (i != 0 && errno == ENOENT){
+                    fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", readed,
+                    strerror(errno));
                     printf("error opening: file doesnt exist\n");
                     return -1;
                 }
+                
             }
+            */
             // && errno != ENOENT
             session_id = session_id_c;
             printf("server: session id is %d\n", session_id);
             if (write(pipe_client, &session_id, sizeof(int)) < 0) {
+                printf("write to client failed\n");
                 return -1;
             }
             session_id_c++;

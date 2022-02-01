@@ -5,6 +5,7 @@
 #include "config.h"
 #include "state.h"
 #include <sys/types.h>
+#include<stdbool.h>
 
 /*
  * Initializes tecnicofs
