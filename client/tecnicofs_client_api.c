@@ -4,6 +4,7 @@
 #include <string.h>
 
 char *concatenate_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len);
+void *send_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len);
 
 int active_session_id;
 int pipe_client;
@@ -147,4 +148,38 @@ char *concatenate_args(int opCode, char *name, int session_id, int  flags, int f
     
 
     return send_msg_buffer;
+}
+
+void *send_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len){
+    int str_len, pipe_buf_size;
+    str_len = strlen(name)+1;
+    pipe_buf_size = sizeof(char) + sizeof(int) + sizeof(int) + sizeof(size_t) + str_len + sizeof(int); 
+    void *request_msg = malloc(pipe_buf_size);
+
+    // concatenate opCode
+    memcpy(request_msg, opCode, sizeof(int));
+    request_msg += sizeof(int);
+
+    // concatenate session_id
+    memcpy(request_msg, session_id, sizeof(int));
+    request_msg += sizeof(int);
+    
+    // concatenate fhandle if necessary
+    if (fhandle != -1){
+        memcpy(request_msg, fhandle, sizeof(int));
+        request_msg += sizeof(int);
+    }
+    if (len != -1){
+        memcpy(request_msg, len, sizeof(size_t));
+        request_msg += sizeof(size_t);
+    }
+    if (name != NULL){
+        memcpy(request_msg, name, str_len);
+        request_msg += sizeof(str_len);
+    }
+    if (flags != -1){
+        memcpy(request_msg, flags, sizeof(int));
+        request_msg += sizeof(int);
+    }
+    return request_msg;
 }
