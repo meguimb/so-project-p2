@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 
 int main(int argc, char **argv) {
 
@@ -35,14 +36,14 @@ int main(int argc, char **argv) {
 
     int clientpipe;
     int session_id = 0;
-
-    for(;;) {
-        char opcode;
-        if (read(pipename,opcode,sizeof(char)) < 0) {
+    char *client_pipe_path;
+    while(true) {
+        char opCode;
+        if (read(pipename,opCode,sizeof(char)) < 0) {
             return -1;
         }
-        if (opcode == TFS_OP_CODE_MOUNT) {
-            char readed[40]
+        if (opCode == TFS_OP_CODE_MOUNT) {
+            char readed[40];
             if (read(pipename,readed,40)<0) {
                 return -1;
             }
@@ -54,7 +55,7 @@ int main(int argc, char **argv) {
                 return -1;
             }
         }
-        else if (opcode == TFS_OP_CODE_UNMOUNT) {
+        else if (opCode == TFS_OP_CODE_UNMOUNT) {
             int session_id_r;
             if (read(pipename,&session_id_r,1)<0) {
                 return -1;
@@ -65,6 +66,23 @@ int main(int argc, char **argv) {
             if (close(clientpipe) < 0) {
                 return -1;
             }
+        }
+        else if (opCode == TFS_OP_CODE_READ){
+            // read (int) session id => 6 bytes
+
+            // read (int) fhandle => 6 bytes
+
+            // read (size_t) len => 8 bytes
+
+        }
+        else if (opCode == TFS_OP_CODE_WRITE){
+            // read (int) session_id
+
+            // read (int) fhandle
+
+            // read (size_t) len
+
+            // read char [len] buffer
         }
     }
 
