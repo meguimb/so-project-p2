@@ -4,6 +4,12 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+int session_id_c;
 
 int main(int argc, char **argv) {
 
@@ -29,6 +35,9 @@ int main(int argc, char **argv) {
         exit(1);
     }
     printf("tfs server opening server pipe\n");
+    session_id_c = 0;
+    int session_id;
+    int ret_val;
     int pipe_server = open(pipename, O_RDONLY);
 
     if (pipe_server < 0) {
@@ -36,29 +45,43 @@ int main(int argc, char **argv) {
     }
 
     int pipe_client;
-    int session_id = 0;
-    char *client_pipe_path;
+    char *client_pipe_path = (char *) malloc(40);
     while(true) {
         char opCode;
-        if (read(pipename,opCode,sizeof(char)) < 0) {
+        //read(pipe_server, &opCode, sizeof(char));
+        
+        if (read(pipe_server, &opCode, sizeof(char)) < 0) {
             return -1;
         }
+        printf("%c %d\n", opCode, opCode);
         if (opCode == TFS_OP_CODE_MOUNT) {
+            printf("ENTERED MOUNT\n");
             char readed[40];
-            if (read(pipename,readed,40)<0) {
+            if (read(pipe_server, readed, 40) < 0) {
                 return -1;
             }
-            pipe_client = open(client_pipe_path, O_WRONLY);
-            if (pipe_client == -1) {
+            strcpy(client_pipe_path, readed);
+            printf("client pipe name is: %s\n", readed);
+            printf("request read from server\n");
+            // pipe_client = open(client_pipe_path, O_WRONLY);
+            while (true){
+                if (open(client_pipe_path, O_WRONLY) < 0 && errno == ENOENT){
+                    printf("error opening: file doesnt exist\n");
+                    return -1;
+                }
+            }
+            // && errno != ENOENT
+            session_id = session_id_c;
+            printf("server: session id is %d\n", session_id);
+            if (write(pipe_client, &session_id, sizeof(int)) < 0) {
                 return -1;
             }
-            if (write(pipe_client, &session_id, 1) < 0) {
-                return -1;
-            }
+            session_id_c++;
+            printf("SERVER: completed tfs_mount successfully\n");
         }
         else if (opCode == TFS_OP_CODE_UNMOUNT) {
             int session_id_r;
-            if (read(pipename,&session_id_r,1)<0) {
+            if (read(pipe_server, &session_id_r, sizeof(int)) < 0) {
                 return -1;
             }
             if (session_id_r != session_id) {
@@ -74,28 +97,43 @@ int main(int argc, char **argv) {
             char *readed;
             // read (int) session id
             if (read(pipe_server, &session_id_atual, sizeof(int)) < 0) {
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
                 return 0;
             }
             // read (int) fhandle
             if (read(pipe_server, &fhandle, sizeof(int)) < 0) {
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
                 return 0;
             }
             // read (size_t) len
             if (read(pipe_server, &len, sizeof(size_t)) < 0) {
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
                 return 0;
             }
             readed = (char *) malloc(len);
             // chamar tfs_read do operations
             if (tfs_read(fhandle, readed, len) != len){
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
                 return 0;
             }
             // devolver info sobre como correu esta operação ao cliente
             // TODO
-            write(pipe_client, 0, sizeof(int));
+            ret_val = 0;
+            if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                return -1;
+            }
             return 0;
         }
         else if (opCode == TFS_OP_CODE_WRITE){
@@ -103,33 +141,49 @@ int main(int argc, char **argv) {
             size_t len;
             // read (int) session_id
             if (read(pipe_server, &session_id_atual, sizeof(int)) < 0) {
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
                 return 0;
             }
             // read (int) fhandle
             if (read(pipe_server, &fhandle, sizeof(int)) < 0) {
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
                 return 0;
             }
             // read (size_t) len
             if (read(pipe_server, &len, sizeof(size_t)) < 0) {
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0 ){
+                    return -1;
+                }
                 return 0;
             }
             char buf [len];
             // read char [len] buffer
             if (read(pipe_server, buf, len) < 0) {
-                write(pipe_client, -1, sizeof(int));
-                return 0;
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
             }
             // chamar tfs_write
             if (tfs_write(fhandle, buf, len) != len){
-                write(pipe_client, -1, sizeof(int));
+                ret_val = -1;
+                if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                    return -1;
+                }
                 return 0;
             }
             // devolver info sobre como correu esta operação ao cliente
             // TODO
-            write(pipe_client, 0, sizeof(int));
+            if (write(pipe_client, 0, sizeof(int)) < 0 ){
+                return -1;
+            }
             return 0;
         }
     }
