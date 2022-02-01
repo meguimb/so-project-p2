@@ -12,8 +12,9 @@ int active_session_id;
 int pipe_client;
 int pipe_server;
 char* _client_pipe_path;
-
+char const*_server_pipe_path;
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
+    _server_pipe_path = server_pipe_path;
     if (unlink(client_pipe_path) != 0 && errno != ENOENT) {
         fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", client_pipe_path,
                     strerror(errno));
@@ -36,28 +37,17 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     }
     printf("write of request done\n");
     // abrir pipe do cliente
-    while(true){
-        int i = open(client_pipe_path, O_RDONLY);
-        printf("output of opening to read in api: %d\n", i);
-        if (i==0){break;}
-        if (i!=0 && errno==ENOENT){
-            printf("file doesnt exist\n");
-            return -1;
-        }
-    }
-    /*
+
     pipe_client = open(client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
     }
-    */
-    printf("open of client path done\n");
+    
     // receber int de session_id do server
     if (read(pipe_client, &active_session_id, sizeof(int)) < 0) {
         return -1;
     }
-    printf("active session id: %d\n", active_session_id);
-    printf("got return int from server\n");
+    printf("client: active session id: %d\n", active_session_id);
     return 0;
 }
 
@@ -95,7 +85,10 @@ int tfs_open(char const *name, int flags) {
     size_t str_len;
     int ret_val;
     void *send_req_str = send_args( (char) TFS_OP_CODE_OPEN, name, active_session_id, flags, -1, 0);
+    printf("request: %s\n", (char *) send_req_str);
     str_len = strlen(send_req_str);
+    close(pipe_server);
+    pipe_server = open(_server_pipe_path, O_WRONLY);
     if (write(pipe_server, send_req_str, str_len) < 0) {
         return -1;
     }
