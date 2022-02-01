@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <stdbool.h>
 
 // char *concatenate_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len);
 void *send_args(char opCode, void const *name, int session_id, int  flags, int fhandle, size_t len);
@@ -12,34 +14,43 @@ int pipe_server;
 char* _client_pipe_path;
 
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
-    printf("beginning of tfs_mount\n");
-    if (unlink(client_pipe_path) != 0) {
+    if (unlink(client_pipe_path) != 0 && errno != ENOENT) {
+        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", client_pipe_path,
+                    strerror(errno));
         printf("unlinking gone wrong\n");
-        return -1;
+        return 0;
     }
-    printf("creating mkfifo\n");
     if (mkfifo(client_pipe_path, 0640) < 0) {
         return -1;
     }
-    printf("tfs_mount: opening pipe_server to read\n");
+    printf("tfs_mount: opening pipe_server to write\n");
     pipe_server = open(server_pipe_path, O_WRONLY);
     if (pipe_server == -1) {
         return -1;
     }
     size_t str_len;
-    printf("send_args get void *\n");
     void *send_req_str = send_args((char) TFS_OP_CODE_MOUNT, client_pipe_path, -1, -1, -1, 0);
-    printf("request args string is: %s\n", (char *) send_req_str);
     str_len = strlen(send_req_str);
     if (write(pipe_server, send_req_str, str_len) < 0) {
         return -1;
     }
     printf("write of request done\n");
     // abrir pipe do cliente
+    while(true){
+        int i = open(client_pipe_path, O_RDONLY);
+        printf("output of opening to read in api: %d\n", i);
+        if (i==0){break;}
+        if (i!=0 && errno==ENOENT){
+            printf("file doesnt exist\n");
+            return -1;
+        }
+    }
+    /*
     pipe_client = open(client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
     }
+    */
     printf("open of client path done\n");
     // receber int de session_id do server
     if (read(pipe_client, &active_session_id, sizeof(int)) < 0) {
@@ -217,16 +228,18 @@ char *concatenate_args(int opCode, char *name, int session_id, int  flags, int f
 void *send_args(char opCode, void const *name, int session_id, int  flags, int fhandle, size_t len){
     size_t str_len, pipe_buf_size;
     str_len = strlen(name)+1;
-    pipe_buf_size = (size_t) (sizeof(char) + sizeof(int) + sizeof(int) + sizeof(size_t) + str_len + sizeof(int)); 
+    pipe_buf_size = (size_t) (sizeof(char) + sizeof(int) + sizeof(int) + sizeof(size_t) + 40 + sizeof(int)); 
     void *request_msg = malloc(pipe_buf_size);
     void *ptr = request_msg;
     // concatenate opCode
     memcpy(request_msg, &opCode, sizeof(char));
     request_msg += sizeof(char);
 
-    // concatenate session_id
-    memcpy(request_msg, &session_id, sizeof(int));
-    request_msg += sizeof(int);
+    // concatenate session_id if necessary
+    if (session_id != -1){
+        memcpy(request_msg, &session_id, sizeof(int));
+        request_msg += sizeof(int);
+    }
     
     // concatenate fhandle if necessary
     if (fhandle != -1){
@@ -239,7 +252,7 @@ void *send_args(char opCode, void const *name, int session_id, int  flags, int f
     }
     if (name != NULL){
         memcpy(request_msg, name, str_len);
-        request_msg += sizeof(str_len);
+        request_msg += 40;
     }
     if (flags != -1){
         memcpy(request_msg, &flags, sizeof(int));
