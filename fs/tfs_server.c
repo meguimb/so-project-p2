@@ -39,17 +39,18 @@ int main(int argc, char **argv) {
         exit(1);
     }
     printf("tfs server opening server pipe\n");
+
     session_id_c = 0;
     int session_id;
     int ret_val;
     int pipe_server = open(pipename, O_RDONLY);
+    int pipe_client = -1;
+    char *client_pipe_path;
 
     if (pipe_server < 0) {
         exit(1);
     }
 
-    int pipe_client;
-    char *client_pipe_path;
     while(true) {
         char opCode;
         //read(pipe_server, &opCode, sizeof(char));
@@ -57,16 +58,9 @@ int main(int argc, char **argv) {
         if (read(pipe_server, &opCode, sizeof(char)) < 0) {
             return -1;
         }
-        printf("op code is %d\n", (int) opCode);
         if (opCode == TFS_OP_CODE_MOUNT) {
             // read and set client pipe path
             client_pipe_path = read_name(pipe_server);
-            /*
-            clean_pipe(pipe_server);
-            close(pipe_server);
-            pipe_server = open(pipename, O_RDONLY);
-            */
-            // set session_id for this new session
             session_id = session_id_c;
            
             // opening client pipe and sending client new session id
@@ -77,12 +71,9 @@ int main(int argc, char **argv) {
             session_id_c++;
         }
         else if (opCode == TFS_OP_CODE_UNMOUNT) {
-            int ret_val;
             int session_id_r = read_int(pipe_server, pipe_client);
             ret_val = 1;
-            printf("session id is %d\n", session_id_r);
             pipe_client = open(client_pipe_path, O_WRONLY);
-            printf("pipe_client is %d\n", pipe_client);
             if (pipe_client < 0){
                 printf("%d\n", pipe_client);
             }
@@ -91,10 +82,8 @@ int main(int argc, char **argv) {
                 return -1;
             }
             close(pipe_client);
-            printf("getting out of unmount\n");
         }
         else if (opCode == TFS_OP_CODE_READ){
-            printf("opCode is read\n");
             int session_id_atual, fhandle;
             size_t len;
             char *readed;
@@ -106,20 +95,18 @@ int main(int argc, char **argv) {
 
             // devolver info sobre como correu esta operação ao cliente
             pipe_client = open(client_pipe_path, O_WRONLY);
-            printf("fhandle is %d, len is %ld\n", fhandle, len);
             readed = malloc(len);
-            ret_val = tfs_read(fhandle, readed, len);
+            ret_val = (int) tfs_read(fhandle, readed, len);
             if (ret_val != strlen(readed)){
                 ret_val = -1;
             }
-            printf("readed is %s\n", readed);
-            printf("tfs_read is %d\n", ret_val);
             if (write(pipe_client, &ret_val, sizeof(int)) < 0){
                 close(pipe_client);
-                return -1;
             }
             if (ret_val != -1){
-                write(pipe_client, readed, ret_val);
+                if (write(pipe_client, readed, (size_t) ret_val) < 0){
+                    close(pipe_client);
+                }
             }
             close(pipe_client);
         }
@@ -159,7 +146,7 @@ int main(int argc, char **argv) {
             len = read_size_t(pipe_server, pipe_client);
             name_ptr = read_name(pipe_server);     
             // perform operation
-            ret_val = tfs_write(fhandle, name_ptr, len);
+            ret_val = (int) tfs_write(fhandle, name_ptr, len);
             
             if (ret_val != strlen(name_ptr)){
                 ret_val = -1;
@@ -174,7 +161,6 @@ int main(int argc, char **argv) {
         }
         else if (opCode == TFS_OP_CODE_CLOSE){
             int session_id_atual, fhandle;
-            char *name_ptr;
             
             // opening client pipe
             pipe_client = open(client_pipe_path, O_WRONLY);
@@ -194,6 +180,26 @@ int main(int argc, char **argv) {
             // closing client pipe
             close(pipe_client);
         }
+        else if (opCode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED){
+            int session_id_atual, fhandle;
+            
+            // opening client pipe
+            pipe_client = open(client_pipe_path, O_WRONLY);
+
+            // read info from pipe
+            session_id_atual = read_int(pipe_server, pipe_client);
+            // perform operation
+            ret_val = tfs_destroy_after_all_closed();
+            // send return code to client
+            if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                close(pipe_client);
+                return -1;
+            }
+            // closing client pipe
+            close(pipe_client);
+            close(pipe_server);
+            return 0;
+        }
     }
 
     return 0;
@@ -203,7 +209,7 @@ char *read_name(int pipe_server){
     char readed[40];
     char *name;
     if (read(pipe_server, readed, 40) < 0) {
-        return -1;
+        return NULL;
     }
     name = malloc(strlen(readed)+1);
     memcpy(name, readed, strlen(readed)+1);
