@@ -4,6 +4,11 @@
 #include <string.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 
 // char *concatenate_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len);
 void *send_args(char opCode, void const *name, int session_id, int  flags, int fhandle, size_t len);
@@ -114,11 +119,15 @@ int tfs_close(int fhandle) {
     /* TODO: Implement this */
     size_t size;
     int ret_val;
+    printf("entered tfs_close\n");
     void *send_req_str = send_args( (char) TFS_OP_CODE_CLOSE, NULL, active_session_id, -1, fhandle, 0);
+    printf("after creating request str\n");
     size = ((size_t *) send_req_str)[0];
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
+    printf("written to server\n");
+    free(send_req_str);
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
@@ -138,11 +147,12 @@ int tfs_close(int fhandle) {
 ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
     size_t size;
     int ret_val;
-    void *send_req_str = send_args( (char) TFS_OP_CODE_WRITE, buffer, active_session_id, -1, -1, len);
+    void *send_req_str = send_args( (char) TFS_OP_CODE_WRITE, buffer, active_session_id, -1, fhandle, len);
     size = ((size_t *) send_req_str)[0];
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
+    free(send_req_str);
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
@@ -156,7 +166,7 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
         printf("error with tfs_write ocurred\n");
         return -1;
     }
-    return 0;
+    return ret_val;
 }
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
@@ -196,14 +206,17 @@ int tfs_shutdown_after_all_closed() {
 }
 
 void *send_args(char opCode, void const *name, int session_id, int  flags, int fhandle, size_t len){
-    size_t str_len, pipe_buf_size;
-    str_len = strlen(name)+1;
+    size_t str_len=0, pipe_buf_size;
+    if (name != NULL){
+        str_len = strlen(name)+1;
+    }
     size_t actual_size = 0;
     pipe_buf_size = (size_t) (sizeof(size_t) + sizeof(char) + sizeof(int) + sizeof(int) + sizeof(size_t) + 40 + sizeof(int)); 
     void *request_msg = malloc(pipe_buf_size);
     void *ptr = request_msg;
     // put number of bytes allocated in the beginning of the pointer
     printf("writing pipe_buf_size of %ld\n", pipe_buf_size);
+
     // leave space for actual size written
     request_msg += sizeof(size_t);
     
