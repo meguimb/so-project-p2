@@ -58,16 +58,24 @@ int tfs_unmount() {
     int ret_val;
 
     void *send_req_str = send_args( (char)TFS_OP_CODE_UNMOUNT, NULL, active_session_id, -1, -1, 0);
-    str_len = strlen(send_req_str);
-    if (write(pipe_server, send_req_str, str_len) < 0) {
+    size_t size = ((size_t *) send_req_str)[0];
+    if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
-    // receber int de retorno do server
+    printf("request written\n");
+    pipe_client = open(_client_pipe_path, O_RDONLY);
+    if (pipe_client == -1) {
+        return -1;
+    }
+    // receber int de session_id do server
     if (read(pipe_client, &ret_val, sizeof(int)) < 0) {
+        printf("read gone wrong\n");
+        close(pipe_client);
         return -1;
     }
+    printf("ret_val is %d\n", ret_val);
     if (ret_val == -1){
-        printf("error with tfs_close ocurred\n");
+        printf("error with tfs_unmount ocurred\n");
         return -1;
     }
     // fechar pipes
@@ -80,7 +88,7 @@ int tfs_unmount() {
     if (unlink(_client_pipe_path)!=0) {
         return -1;
     }
-    return -1;
+    return 0;
 }
 
 int tfs_open(char const *name, int flags) {
@@ -171,8 +179,8 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
     size_t size;
-    int nOfBytesRead;
-    void *send_req_str = send_args( (char) TFS_OP_CODE_READ, buffer, active_session_id, -1, -1, len);
+    int ret_val, nOfBytes;
+    void *send_req_str = send_args( (char) TFS_OP_CODE_READ, NULL, active_session_id, -1, fhandle, len);
     size = ((size_t *) send_req_str)[0];
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
@@ -181,23 +189,14 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
     if (pipe_client == -1) {
         return -1;
     }
-    if (read(pipe_client, &nOfBytesRead, sizeof(int)) < 0) {
+    if (read(pipe_client, &nOfBytes, sizeof(int)) < 0) {
         return -1;
+    }
+    if (nOfBytes != -1){
+        ret_val = read(pipe_client, buffer, nOfBytes);
     }
     close(pipe_client);
-    printf("return value from tfs_read is %d\n", nOfBytesRead);
-    if (nOfBytesRead == -1){
-        printf("error with tfs_write ocurred\n");
-        return -1;
-    }
-
-    if (nOfBytesRead == -1){
-        printf("error ocurred with tfs_read\n");
-    }
-    else if (nOfBytesRead == strlen(buffer)){
-        printf("everything went smoothyly\n");
-    }
-    return 0;
+    return nOfBytes;
 }
 
 int tfs_shutdown_after_all_closed() {
@@ -215,19 +214,18 @@ void *send_args(char opCode, void const *name, int session_id, int  flags, int f
     void *request_msg = malloc(pipe_buf_size);
     void *ptr = request_msg;
     // put number of bytes allocated in the beginning of the pointer
-    printf("writing pipe_buf_size of %ld\n", pipe_buf_size);
 
     // leave space for actual size written
     request_msg += sizeof(size_t);
     
     // concatenate opCode
-    printf("writing opCode of %d\n", opCode);
+    //printf("writing opCode of %d\n", opCode);
     memcpy(request_msg, &opCode, sizeof(char));
     request_msg += sizeof(char);
     actual_size += sizeof(char);
     // concatenate session_id if necessary
     if (session_id != -1){
-        printf("writing session_id of %d\n", session_id);
+        //printf("writing session_id of %d\n", session_id);
         memcpy(request_msg, &session_id, sizeof(int));
         request_msg += sizeof(int);
         actual_size += sizeof(int);
@@ -235,25 +233,25 @@ void *send_args(char opCode, void const *name, int session_id, int  flags, int f
     
     // concatenate fhandle if necessary
     if (fhandle != -1){
-        printf("writing fhandle of %d\n", fhandle);
+        //printf("writing fhandle of %d\n", fhandle);
         memcpy(request_msg, &fhandle, sizeof(int));
         request_msg += sizeof(int);
         actual_size += sizeof(int);
     }
     if (len != 0){
-        printf("writing len of %ld\n", len);
+        //printf("writing len of %ld\n", len);
         memcpy(request_msg, &len, sizeof(size_t));
         request_msg += sizeof(size_t);
         actual_size += sizeof(size_t);
     }
     if (name != NULL){
-        printf("writing name of %s\n", name);
+        //printf("writing name of %s\n", name);
         memcpy(request_msg, name, str_len);
         request_msg += 40;
         actual_size += 40;
     }
     if (flags != -1){
-        printf("writing flag of %d\n", flags);
+        //printf("writing flag of %d\n", flags);
         memcpy(request_msg, &flags, sizeof(int));
         request_msg += sizeof(int);
         actual_size += sizeof(int);
