@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
             */
             // set session_id for this new session
             session_id = session_id_c;
-            printf("cleaned pipe\n");
+           
             // opening client pipe and sending client new session id
             pipe_client = open(client_pipe_path, O_WRONLY);
             if (write(pipe_client, &session_id, sizeof(int)) < 0) {
@@ -161,9 +161,34 @@ int main(int argc, char **argv) {
             printf("session is is %d, fhandle is %d and len is %ld and name is %s\n", session_id_atual, fhandle, len, name_ptr);
             // perform operation
             ret_val = tfs_write(fhandle, name_ptr, len);
-            if (ret_val != sizeof(name_ptr)){
-                printf("size written is different than size of buffer\n");
+            
+            if (ret_val != strlen(name_ptr)){
+                ret_val = -1;
             }
+            // send return code to client
+            if (write(pipe_client, &ret_val, sizeof(int)) < 0){
+                close(pipe_client);
+                return -1;
+            }
+            // closing client pipe
+            close(pipe_client);
+        }
+        else if (opCode == TFS_OP_CODE_CLOSE){
+            printf("opCode is close\n");
+            int session_id_atual, flags;
+            char *name_ptr;
+            
+            // opening client pipe
+            pipe_client = open(client_pipe_path, O_WRONLY);
+
+            // read info from pipe
+            session_id_atual = read_int(pipe_server, pipe_client);
+            name_ptr = read_name(pipe_server);     
+            flags = read_int(pipe_server, pipe_client);
+
+            // perform operation
+            ret_val = tfs_open(name_ptr, flags);
+
             // send return code to client
             if (write(pipe_client, &ret_val, sizeof(int)) < 0){
                 close(pipe_client);
