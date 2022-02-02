@@ -15,28 +15,23 @@ char* _client_pipe_path;
 char const*_server_pipe_path;
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     _server_pipe_path = server_pipe_path;
+    _client_pipe_path = client_pipe_path;
     if (unlink(client_pipe_path) != 0 && errno != ENOENT) {
-        fprintf(stderr, "[ERR]: unlink(%s) failed: %s\n", client_pipe_path,
-                    strerror(errno));
-        printf("unlinking gone wrong\n");
         return 0;
     }
     if (mkfifo(client_pipe_path, 0640) < 0) {
         return -1;
     }
-    printf("tfs_mount: opening pipe_server to write\n");
     pipe_server = open(server_pipe_path, O_WRONLY);
     if (pipe_server == -1) {
         return -1;
     }
-    size_t str_len;
     void *send_req_str = send_args((char) TFS_OP_CODE_MOUNT, client_pipe_path, -1, -1, -1, 0);
-    str_len = strlen(send_req_str);
-    if (write(pipe_server, send_req_str, str_len) < 0) {
+    size_t size = ((size_t *) send_req_str)[0];
+    if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
-    printf("write of request done\n");
-    // abrir pipe do cliente
+    free(send_req_str);
 
     pipe_client = open(client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
@@ -47,13 +42,14 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     if (read(pipe_client, &active_session_id, sizeof(int)) < 0) {
         return -1;
     }
-    printf("client: active session id: %d\n", active_session_id);
+    close(pipe_client);
     return 0;
 }
 
 int tfs_unmount() {
     size_t str_len;
     int ret_val;
+
     void *send_req_str = send_args( (char)TFS_OP_CODE_UNMOUNT, NULL, active_session_id, -1, -1, 0);
     str_len = strlen(send_req_str);
     if (write(pipe_server, send_req_str, str_len) < 0) {
@@ -82,20 +78,25 @@ int tfs_unmount() {
 
 int tfs_open(char const *name, int flags) {
     /* TODO: Implement this */
-    size_t str_len;
+    size_t size;
     int ret_val;
     void *send_req_str = send_args( (char) TFS_OP_CODE_OPEN, name, active_session_id, flags, -1, 0);
-    printf("request: %s\n", (char *) send_req_str);
-    str_len = strlen(send_req_str);
-    close(pipe_server);
-    pipe_server = open(_server_pipe_path, O_WRONLY);
-    if (write(pipe_server, send_req_str, str_len) < 0) {
+
+    size = ((size_t *) send_req_str)[0];
+    char *str = (char *) send_req_str;
+    if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
+    printf("written to server sucessfully\n");
+    free(send_req_str);
+
+    // open client pipe to read
+    printf("open client pipe to read\n");
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
     }
+    printf("opened sucessfully\n");
     if (read(pipe_client, &ret_val, sizeof(int)) < 0) {
         return -1;
     }
@@ -103,6 +104,7 @@ int tfs_open(char const *name, int flags) {
         printf("error with tfs_close ocurred\n");
         return -1;
     }
+    close(pipe_client);
     return 0;
 }
 
@@ -178,52 +180,16 @@ int tfs_shutdown_after_all_closed() {
     /* TODO: Implement this */
     return -1;
 }
-/*
-char *concatenate_args(int opCode, char *name, int session_id, int  flags, int fhandle, size_t len){
-    char str [40], int_to_char_buffer [10];
-    char *send_msg_buffer;
-    int nOfDigitsSessionId = session_id >= 0? 6 : 0;
-    int nOfDigitsFhandle = fhandle >= 0? 6 : 0;
-    int nOfDigitsLen = len >= 0? 8 : 0;
-    strcpy(str, name);
-    // bytes of: char(opCode) + char(session_id) + char(fhandle) + char (len) + char[len] + char(flags) + max num of |'s
-    int pipe_buf_size = sizeof(char) + nOfDigitsSessionId + nOfDigitsFhandle + nOfDigitsLen + strlen(name)+1 + sizeof(int) + 4; 
-    send_msg_buffer = (char *) malloc(pipe_buf_size);
-    sprintf(int_to_char_buffer, "%d", opCode);
-    strcat(send_msg_buffer, int_to_char_buffer);
-    strcat(send_msg_buffer, "|");
-    sprintf(int_to_char_buffer, "%d", session_id);
-    strcat(send_msg_buffer, int_to_char_buffer);
-    if (fhandle != -1){
-        strcat(send_msg_buffer, "|");
-        sprintf(int_to_char_buffer, "%d", fhandle);
-        strcat(send_msg_buffer, int_to_char_buffer);
-    }
-    if (len != -1){
-        strcat(send_msg_buffer, "|");
-        sprintf(int_to_char_buffer, "%d", len);
-        strcat(send_msg_buffer, int_to_char_buffer);
-    }
-    if (name != NULL){
-        strcat(send_msg_buffer, "|");
-        strcat(send_msg_buffer, name);
-    }
-    if (flags != -1){
-        strcat(send_msg_buffer, "|");
-        sprintf(int_to_char_buffer, "%d", flags);
-        strcat(send_msg_buffer, int_to_char_buffer);
-    }
-    
 
-    return send_msg_buffer;
-}
-*/
 void *send_args(char opCode, void const *name, int session_id, int  flags, int fhandle, size_t len){
     size_t str_len, pipe_buf_size;
     str_len = strlen(name)+1;
     pipe_buf_size = (size_t) (sizeof(char) + sizeof(int) + sizeof(int) + sizeof(size_t) + 40 + sizeof(int)); 
     void *request_msg = malloc(pipe_buf_size);
     void *ptr = request_msg;
+    // put number of bytes allocated in the beginning of the pointer
+    memcpy(request_msg, &pipe_buf_size, sizeof(size_t));
+    request_msg += sizeof(size_t);
     // concatenate opCode
     memcpy(request_msg, &opCode, sizeof(char));
     request_msg += sizeof(char);
