@@ -16,7 +16,7 @@ void *send_args(char opCode, void const *name, int session_id, int  flags, int f
 int active_session_id;
 int pipe_client;
 int pipe_server;
-char* _client_pipe_path;
+char const* _client_pipe_path;
 char const*_server_pipe_path;
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     _server_pipe_path = server_pipe_path;
@@ -48,13 +48,11 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
         close(pipe_client);
         return -1;
     }
-    printf("session id is %d\n", active_session_id);
     close(pipe_client);
     return 0;
 }
 
 int tfs_unmount() {
-    size_t str_len;
     int ret_val;
 
     void *send_req_str = send_args( (char)TFS_OP_CODE_UNMOUNT, NULL, active_session_id, -1, -1, 0);
@@ -62,27 +60,20 @@ int tfs_unmount() {
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
-    printf("request written\n");
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
     }
     // receber int de session_id do server
     if (read(pipe_client, &ret_val, sizeof(int)) < 0) {
-        printf("read gone wrong\n");
         close(pipe_client);
         return -1;
     }
-    printf("ret_val is %d\n", ret_val);
     if (ret_val == -1){
-        printf("error with tfs_unmount ocurred\n");
         return -1;
     }
     // fechar pipes
     if (close(pipe_client) < 0) {
-        return -1;
-    }
-    if (close(pipe_server) < 0) {
         return -1;
     }
     if (unlink(_client_pipe_path)!=0) {
@@ -95,17 +86,13 @@ int tfs_open(char const *name, int flags) {
     /* TODO: Implement this */
     size_t size;
     int ret_val;
-    printf("before send_args\n");
     void *send_req_str = send_args( (char) TFS_OP_CODE_OPEN, name, active_session_id, flags, -1, 0);
 
     size = ((size_t *) send_req_str)[0];
-    printf("size is %ld\n", size);
-    printf("writing to server\n");
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
     free(send_req_str);
-    printf("opening client pipe\n");
     // open client pipe to read
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
@@ -115,9 +102,7 @@ int tfs_open(char const *name, int flags) {
         return -1;
     }
     close(pipe_client);
-    printf("return value from tfs_open is %d\n", ret_val);
     if (ret_val == -1){
-        printf("error with tfs_open ocurred\n");
         return -1;
     }
     return 0;
@@ -127,14 +112,11 @@ int tfs_close(int fhandle) {
     /* TODO: Implement this */
     size_t size;
     int ret_val;
-    printf("entered tfs_close\n");
     void *send_req_str = send_args( (char) TFS_OP_CODE_CLOSE, NULL, active_session_id, -1, fhandle, 0);
-    printf("after creating request str\n");
     size = ((size_t *) send_req_str)[0];
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
-    printf("written to server\n");
     free(send_req_str);
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
@@ -144,9 +126,7 @@ int tfs_close(int fhandle) {
         return -1;
     }
     close(pipe_client);
-    printf("return value from tfs_close is %d\n", ret_val);
     if (ret_val == -1){
-        printf("error with tfs_close ocurred\n");
         return -1;
     }
     return 0;
@@ -169,9 +149,7 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
         return -1;
     }
     close(pipe_client);
-    printf("return value from tfs_write is %d\n", ret_val);
     if (ret_val == -1){
-        printf("error with tfs_write ocurred\n");
         return -1;
     }
     return ret_val;
@@ -179,7 +157,8 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
     size_t size;
-    int ret_val, nOfBytes;
+    ssize_t ret_val;
+    int nOfBytes;
     void *send_req_str = send_args( (char) TFS_OP_CODE_READ, NULL, active_session_id, -1, fhandle, len);
     size = ((size_t *) send_req_str)[0];
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
@@ -187,21 +166,44 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
     }
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
-        return -1;
+        return (ssize_t) -1;
     }
     if (read(pipe_client, &nOfBytes, sizeof(int)) < 0) {
-        return -1;
+        return (ssize_t) -1;
     }
     if (nOfBytes != -1){
-        ret_val = read(pipe_client, buffer, nOfBytes);
+        ret_val = (int) read(pipe_client, buffer, (size_t) nOfBytes);
+        if (ret_val == -1){
+            return (ssize_t) -1;
+        }
     }
     close(pipe_client);
-    return nOfBytes;
+    return (ssize_t) nOfBytes;
 }
 
 int tfs_shutdown_after_all_closed() {
     /* TODO: Implement this */
-    return -1;
+    size_t size;
+    int ret_val;
+    void *send_req_str = send_args( (char) TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED, NULL, active_session_id, -1, -1, 0);
+    size = ((size_t *) send_req_str)[0];
+    if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
+        return -1;
+    }
+    free(send_req_str);
+    pipe_client = open(_client_pipe_path, O_RDONLY);
+    if (pipe_client == -1) {
+        return -1;
+    }
+    if (read(pipe_client, &ret_val, sizeof(int)) < 0) {
+        return -1;
+    }
+    close(pipe_client);
+    close(pipe_server);
+    if (ret_val == -1){
+        return -1;
+    }
+    return 0;
 }
 
 void *send_args(char opCode, void const *name, int session_id, int  flags, int fhandle, size_t len){
