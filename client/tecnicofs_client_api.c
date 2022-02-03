@@ -137,6 +137,7 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
     int ret_val;
     void *send_req_str = send_args( (char) TFS_OP_CODE_WRITE, buffer, active_session_id, -1, fhandle, len);
     size = ((size_t *) send_req_str)[0];
+
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
