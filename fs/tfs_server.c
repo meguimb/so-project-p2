@@ -9,8 +9,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 
 #define S 16
+#define FREE 0
+#define TAKEN 1
 
 struct client_info {
     int session_id;
@@ -35,12 +38,17 @@ int read_int(int pipe_server, int pipe_client);
 size_t read_size_t(int pipe_server, int pipe_client);
 int clean_pipe(int pipe_server);
 void *execute(void *args);
+int error_check(int client_pipe);
+int find_free_session(int table [S]);
 
 // Global Variables
-pthread_mutex_t buffers_mutexes [S];
-pthread_cond_t can_consume [S];
-pthread_cond_t can_produce [S];
-pthread_t tasks[S];
+static pthread_mutex_t buffers_mutexes [S];
+static pthread_cond_t can_consume [S];
+static pthread_cond_t can_produce [S];
+static pthread_t tasks[S];
+static int open_server = 1;
+static int free_sessions[S] = {FREE};
+
 
 int main(int argc, char **argv) {
 
@@ -51,13 +59,7 @@ int main(int argc, char **argv) {
 
     char *pipename = argv[1];
     printf("Starting TecnicoFS server with pipe called %s\n", pipename);
-    // PARTE 2 ETAPA 2
-    // no while vamos receber u
-    // array de S+1 tarefas, 1 recetora, S trabalhadoras, cada uma associada a um session_id
-    // as tarefas trabalhadoras servem os pedidos que a tarefa recetora recebe
 
-    // API -> write no pipe_server e read do client_server
-    // SERVER -> read do pipe_server e write no client_server
     if (unlink(pipename) != 0 && errno != ENOENT) {
         exit(EXIT_FAILURE);
     }
@@ -72,10 +74,8 @@ int main(int argc, char **argv) {
     /* creating client struct array */
     ClientInfo *clients [S];
     InputBuffer *consumer_inputs [S];
-    int session_id_c = 0;
     int ret_val;
     int pipe_server = open(pipename, O_RDONLY);
-    char *client_pipe_path;
 
     if (pipe_server < 0) {
         exit(1);
@@ -95,29 +95,39 @@ int main(int argc, char **argv) {
         clients[i] = malloc(sizeof(ClientInfo *));
     }
 
-    while(true) {
+    while(true && open_server==1) {
         char opCode;
         if (read(pipe_server, &opCode, sizeof(char)) < 0) {
             return -1;
         }
         if (opCode == TFS_OP_CODE_MOUNT) {
-            int session_id = session_id_c;
-            pthread_mutex_lock(&buffers_mutexes[session_id]);
-            // read and set client pipe path
+            int session_id;
+            char *client_pipe_path;
+            
+            session_id = find_free_session(free_sessions);
             client_pipe_path = read_name(pipe_server);
-            if (session_id >= S){
-                return -1;
+
+            // if all sessions are taken
+            if (session_id == -1){
+                int client_pipe = open(client_pipe_path, O_WRONLY);
+                if (write(client_pipe, &session_id, sizeof(int)) < 0) {
+                    error_check(client_pipe);
+                }
+                else{
+                    close(client_pipe);
+                }
             }
-            ClientInfo *c = clients[session_id];
-            c->session_id = session_id;
-            // opening client pipe and sending client new session id
-            c->client_pipe = open(client_pipe_path, O_WRONLY);
-            if (write(c->client_pipe, &c->session_id, sizeof(int)) < 0) {
-                return -1;
+            else{
+                pthread_mutex_lock(&buffers_mutexes[session_id]);
+                ClientInfo *c = clients[session_id];
+                c->session_id = session_id;
+                // opening client pipe and sending client new session id
+                c->client_pipe = open(client_pipe_path, O_WRONLY);
+                if (write(c->client_pipe, &c->session_id, sizeof(int)) < 0) {
+                    error_check(c->client_pipe);
+                }
+                pthread_mutex_unlock(&buffers_mutexes[session_id]);
             }
-            pthread_mutex_unlock(&buffers_mutexes[session_id]);
-            session_id_c++;
-            printf("getting out of mount\n");
         }
         else if (opCode == TFS_OP_CODE_UNMOUNT) {
             int pipe_client, session_id = read_int(pipe_server, -1);
@@ -176,34 +186,27 @@ int main(int argc, char **argv) {
             // pthread signal
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
-            printf("getting out of open\n");
         }
         else if (opCode == TFS_OP_CODE_WRITE){
             int session_id, pipe_client;
-            printf("reading session id\n");
             // read info from pipe
             session_id = read_int(pipe_server, -1);
             pthread_mutex_lock(&buffers_mutexes[session_id]);
-            printf("locked\n");
             // get client pipe 
             ClientInfo *c = clients[session_id];
             pipe_client = c->client_pipe;   
-            printf("pipe_client is %d\n", pipe_client);
             // read parameters and put them on buffer
             InputBuffer *buf = consumer_inputs[session_id];
             buf->client = c;
-            printf("setting input buffer params\n");
             buf->fhandle = read_int(pipe_server, pipe_client);
             buf->len = read_size_t(pipe_server, pipe_client);
             buf->name = read_name(pipe_server);    
-            printf("server: len is %ld and name is %s\n", buf->len, buf->name);
             buf->opCode = TFS_OP_CODE_WRITE;
             buf->work = true;
 
             // pthread signal
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
-            printf("getting out of write\n");
         }
         else if (opCode == TFS_OP_CODE_CLOSE){
             int session_id, pipe_client;
@@ -254,7 +257,7 @@ int main(int argc, char **argv) {
             return 0;
         }
     }
-
+    close(pipe_server);
     return 0;
 }
 
@@ -307,11 +310,9 @@ void *execute(void *args){
     int ret_val, session_id = buf->session_id;
     while(true){
         pthread_mutex_lock(&buffers_mutexes[session_id]);
-        printf(".");
         while (!buf->work){
             pthread_cond_wait(&can_consume[session_id], &buffers_mutexes[session_id]);
         }
-        printf("execute stuff\n");
         opCode = buf->opCode;
         session_id = buf->client->session_id;
         if (opCode == TFS_OP_CODE_OPEN){
@@ -319,9 +320,10 @@ void *execute(void *args){
             // send return code to client
             if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
                 buf->work = false;
-                return NULL;
+               if (error_check(buf->client->client_pipe) == -2){
+                    return NULL;
+                }
             }
-            printf("getting out of open in execute()\n");
         }
         else if (opCode == TFS_OP_CODE_CLOSE){
             ret_val = tfs_close(buf->fhandle);
@@ -329,7 +331,9 @@ void *execute(void *args){
             // send return code to client
             if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
                 buf->work = false;
-                return NULL;
+                if (error_check(buf->client->client_pipe) == -2){
+                    return NULL;
+                }
             }
         }
         else if (opCode == TFS_OP_CODE_READ){
@@ -341,26 +345,33 @@ void *execute(void *args){
                 ret_val = -1;
             }
 
-            write(buf->client->client_pipe, &ret_val, sizeof(int));
-            if (ret_val != -1){
-                write(buf->client->client_pipe, text_read, (size_t) ret_val);
+            if (write(buf->client->client_pipe, &ret_val, sizeof(int)) > 0 && ret_val != -1){
+                if (write(buf->client->client_pipe, text_read, (size_t) ret_val) < 0){
+                    buf->work = false;
+                    if (error_check(buf->client->client_pipe) == -2){
+                        return NULL;
+                    }
+                }
+            }
+            else{
+                buf->work = false;
+                if (error_check(buf->client->client_pipe) == -2){
+                    return NULL;
+                }
             }
         }
         else if (opCode == TFS_OP_CODE_WRITE){
-            printf("beginning of write in execute()\n");
             ret_val = (int) tfs_write(buf->fhandle, buf->name, buf->len);
-            printf("ret_val is %d, len is %ld and name is %s\n", ret_val, buf->len, buf->name);
             if (ret_val != strlen(buf->name)){
                 ret_val = -1;
             }
-            printf("before writing to client\n");
             // send return code to client
             if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
-                printf("returning null\n");
                 buf->work = false;
-                return NULL;
+                if (error_check(buf->client->client_pipe) == -2){
+                    return NULL;
+                }
             }
-            printf("written to client\n");
         }
         else if (opCode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED){
             ret_val = tfs_destroy_after_all_closed();
@@ -368,17 +379,42 @@ void *execute(void *args){
             // send return code to client
             if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
                 buf->work = false;
-                return NULL;
+                if (error_check(buf->client->client_pipe) == -2){
+                    
+                    return NULL;
+                }
             }
         }
-        printf("setting work false and signal\n");
         buf->work = false;
         // pthread_cond_signal(&can_produce[session_id]);
         pthread_mutex_unlock(&buffers_mutexes[session_id]);
-        printf("unlocking\n");
     }
 }
 
 // se nao for possivel escrever, descobrir qual erro está a acontecer
 // se for do pipe, fechar pipe
 // se for do signal, tentar outra vez
+
+int error_check(int client_pipe){
+    // verificar se é erro do pipe
+    if (errno == EPIPE){
+        close(client_pipe);
+        return -1;
+    }
+    // verificar se é erro do sinal
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        return 0;
+    }
+    open_server = 0;
+    return -2;
+}
+
+int find_free_session(int table [S]){
+    for (int i = 0; i < S; i++){
+        if (table[i] == FREE){
+            table[i] = TAKEN;
+            return i;
+        }
+    }
+    return -1;
+}
