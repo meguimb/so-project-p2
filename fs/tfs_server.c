@@ -21,10 +21,12 @@ typedef struct client_info ClientInfo;
 struct input_buffer {
     char opCode;
     ClientInfo *client;
+    int session_id;
     char *name;
     int flags;
     int fhandle;
     size_t len;
+    bool work;
 };
 typedef struct input_buffer InputBuffer;
 
@@ -32,11 +34,13 @@ char *read_name(int pipe_server);
 int read_int(int pipe_server, int pipe_client);
 size_t read_size_t(int pipe_server, int pipe_client);
 int clean_pipe(int pipe_server);
+void *execute(void *args);
 
 // Global Variables
 pthread_mutex_t buffers_mutexes [S];
 pthread_cond_t can_consume [S];
 pthread_cond_t can_produce [S];
+pthread_t tasks[S];
 
 int main(int argc, char **argv) {
 
@@ -82,15 +86,17 @@ int main(int argc, char **argv) {
     // create S buffers
     for (int i = 0; i < S; i++){
         consumer_inputs[i] = (InputBuffer *) malloc(sizeof(InputBuffer));
+        consumer_inputs[i]->work = false;
+        consumer_inputs[i]->session_id = i;
+        pthread_create(&tasks[i], NULL, execute, consumer_inputs[i]);
         pthread_cond_init(&can_produce[i], NULL);
         pthread_cond_init(&can_consume[i], NULL);
         pthread_mutex_init(&buffers_mutexes[i], NULL);
+        clients[i] = malloc(sizeof(ClientInfo *));
     }
 
     while(true) {
         char opCode;
-        //read(pipe_server, &opCode, sizeof(char));
-        
         if (read(pipe_server, &opCode, sizeof(char)) < 0) {
             return -1;
         }
@@ -102,7 +108,6 @@ int main(int argc, char **argv) {
             if (session_id >= S){
                 return -1;
             }
-            clients[session_id] = malloc(sizeof(ClientInfo *));
             ClientInfo *c = clients[session_id];
             c->session_id = session_id;
             // opening client pipe and sending client new session id
@@ -112,13 +117,14 @@ int main(int argc, char **argv) {
             }
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
             session_id_c++;
+            printf("getting out of mount\n");
         }
         else if (opCode == TFS_OP_CODE_UNMOUNT) {
             int pipe_client, session_id = read_int(pipe_server, -1);
             ret_val = 1;
             ClientInfo *c = clients[session_id];
             pipe_client = c->client_pipe;
-            
+            free(clients[session_id]);
             if (write(pipe_client, &ret_val, sizeof(int)) < 0){
                 close(pipe_client);
                 return -1;
@@ -126,9 +132,7 @@ int main(int argc, char **argv) {
             close(pipe_client);
         }
         else if (opCode == TFS_OP_CODE_READ){
-            int session_id, fhandle, pipe_client;
-            size_t len;
-            char *readed;
+            int session_id, pipe_client;
 
             // read (int) session id
             session_id = read_int(pipe_server, -1);
@@ -137,36 +141,21 @@ int main(int argc, char **argv) {
             // get info of this session
             ClientInfo *c = clients[session_id];
             pipe_client = c->client_pipe;
-            // read other request parameters
-            fhandle = read_int(pipe_server, pipe_client);
-            len = read_size_t(pipe_server, pipe_client);
 
             // put parameters on buffer
             InputBuffer *buf = consumer_inputs[session_id];
             buf->client = c;
-            buf->fhandle = fhandle;
-            buf->len = len;
+            buf->fhandle = read_int(pipe_server, pipe_client);;
+            buf->len = read_size_t(pipe_server, pipe_client);;
             buf->opCode = TFS_OP_CODE_READ;
+            buf->work = true;
 
             // pthread signal
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
-
-            // devolver info sobre como correu esta operação ao cliente
-            readed = malloc(len);
-            ret_val = (int) tfs_read(fhandle, readed, len);
-            if (ret_val != strlen(readed)){
-                ret_val = -1;
-            }
-
-            write(pipe_client, &ret_val, sizeof(int));
-            if (ret_val != -1){
-                write(pipe_client, readed, (size_t) ret_val);
-            }
         }
         else if (opCode == TFS_OP_CODE_OPEN){
-            int session_id, flags, pipe_client;
-            char *name_ptr;
+            int session_id, pipe_client;
 
             // read info from pipe
             session_id = read_int(pipe_server, -1);
@@ -175,73 +164,49 @@ int main(int argc, char **argv) {
 
             // opening client pipe
             pipe_client = c->client_pipe;
-            name_ptr = read_name(pipe_server);     
-            flags = read_int(pipe_server, pipe_client);
 
             // put parameters on buffer
             InputBuffer *buf = consumer_inputs[session_id];
             buf->client = c;
-            buf->name = name_ptr;
-            buf->flags = flags;
+            buf->name = read_name(pipe_server);
+            buf->flags = read_int(pipe_server, pipe_client);
             buf->opCode = TFS_OP_CODE_OPEN;
+            buf->work = true;
 
             // pthread signal
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
-
-            // perform operation
-            ret_val = tfs_open(name_ptr, flags);
-
-            // send return code to client
-            if (write(pipe_client, &ret_val, sizeof(int)) < 0){
-                return -1;
-            }
+            printf("getting out of open\n");
         }
         else if (opCode == TFS_OP_CODE_WRITE){
-            int session_id, fhandle, pipe_client;
-            size_t len;
-            char *name_ptr;
-
+            int session_id, pipe_client;
+            printf("reading session id\n");
             // read info from pipe
             session_id = read_int(pipe_server, -1);
             pthread_mutex_lock(&buffers_mutexes[session_id]);
+            printf("locked\n");
+            // get client pipe 
             ClientInfo *c = clients[session_id];
-
-            // open client pipe 
-            pipe_client = c->client_pipe;
-
-            // read rest of info
-            fhandle = read_int(pipe_server, pipe_client);
-            len = read_size_t(pipe_server, pipe_client);
-            name_ptr = read_name(pipe_server);    
-
-            // put parameters on buffer
+            pipe_client = c->client_pipe;   
+            printf("pipe_client is %d\n", pipe_client);
+            // read parameters and put them on buffer
             InputBuffer *buf = consumer_inputs[session_id];
             buf->client = c;
-            buf->name = name_ptr;
-            buf->fhandle = fhandle;
-            buf->len = len;
+            printf("setting input buffer params\n");
+            buf->fhandle = read_int(pipe_server, pipe_client);
+            buf->len = read_size_t(pipe_server, pipe_client);
+            buf->name = read_name(pipe_server);    
+            printf("server: len is %ld and name is %s\n", buf->len, buf->name);
             buf->opCode = TFS_OP_CODE_WRITE;
+            buf->work = true;
 
             // pthread signal
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
-        
-            // perform operation
-            ret_val = (int) tfs_write(fhandle, name_ptr, len);
-            
-            if (ret_val != strlen(name_ptr)){
-                ret_val = -1;
-            }
-
-            // send return code to client
-            if (write(pipe_client, &ret_val, sizeof(int)) < 0){
-                return -1;
-            }
-            // closing client pipe
+            printf("getting out of write\n");
         }
         else if (opCode == TFS_OP_CODE_CLOSE){
-            int session_id, fhandle, pipe_client;
+            int session_id, pipe_client;
 
             // read info from pipe
             session_id = read_int(pipe_server, -1);
@@ -251,25 +216,16 @@ int main(int argc, char **argv) {
             ClientInfo *c = clients[session_id];
             pipe_client = c->client_pipe;
 
-            fhandle = read_int(pipe_server, pipe_client);
-
-            // put parameters on buffer
+            // read parameters and put them on buffer
             InputBuffer *buf = consumer_inputs[session_id];
             buf->client = c;
-            buf->fhandle = fhandle;
+            buf->fhandle = read_int(pipe_server, pipe_client);
             buf->opCode = TFS_OP_CODE_CLOSE;
+            buf->work = true;
 
             // pthread signal
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
-
-            // perform operation
-            ret_val = tfs_close(fhandle);
-
-            // send return code to client
-            if (write(pipe_client, &ret_val, sizeof(int)) < 0){
-                return -1;
-            }
         }
         else if (opCode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED){
             int session_id, pipe_client;
@@ -285,18 +241,12 @@ int main(int argc, char **argv) {
             InputBuffer *buf = consumer_inputs[session_id];
             buf->client = c;
             buf->opCode = TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED;
+            buf->work = true;
 
             // pthread signal
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
 
-            // perform operation
-            ret_val = tfs_destroy_after_all_closed();
-
-            // send return code to client
-            if (write(pipe_client, &ret_val, sizeof(int)) < 0){
-                return -1;
-            }
             printf("Shutting down TecnicoFS server.\n");
             // closing client pipe
             close(pipe_client);
@@ -352,25 +302,83 @@ int clean_pipe(int pipe_server){
 
 void *execute(void *args){
     InputBuffer *buf = (InputBuffer *) args;
-    char opCode = buf->opCode;
-    int session_id = buf->client->session_id;
-    pthread_mutex_lock(&buffers_mutexes[session_id]);
-    if (opCode == TFS_OP_CODE_OPEN){
-        tfs_open(buf->name, buf->flags);
+    char opCode;
+    char *text_read;
+    int ret_val, session_id = buf->session_id;
+    while(true){
+        pthread_mutex_lock(&buffers_mutexes[session_id]);
+        printf(".");
+        while (!buf->work){
+            pthread_cond_wait(&can_consume[session_id], &buffers_mutexes[session_id]);
+        }
+        printf("execute stuff\n");
+        opCode = buf->opCode;
+        session_id = buf->client->session_id;
+        if (opCode == TFS_OP_CODE_OPEN){
+            ret_val = tfs_open(buf->name, buf->flags);
+            // send return code to client
+            if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
+                buf->work = false;
+                return NULL;
+            }
+            printf("getting out of open in execute()\n");
+        }
+        else if (opCode == TFS_OP_CODE_CLOSE){
+            ret_val = tfs_close(buf->fhandle);
+
+            // send return code to client
+            if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
+                buf->work = false;
+                return NULL;
+            }
+        }
+        else if (opCode == TFS_OP_CODE_READ){
+            text_read = malloc(buf->len);
+            ret_val = (int) tfs_read(buf->fhandle, text_read, buf->len);
+
+            // devolver info sobre como correu esta operação ao cliente
+            if (ret_val != strlen(text_read)){
+                ret_val = -1;
+            }
+
+            write(buf->client->client_pipe, &ret_val, sizeof(int));
+            if (ret_val != -1){
+                write(buf->client->client_pipe, text_read, (size_t) ret_val);
+            }
+        }
+        else if (opCode == TFS_OP_CODE_WRITE){
+            printf("beginning of write in execute()\n");
+            ret_val = (int) tfs_write(buf->fhandle, buf->name, buf->len);
+            printf("ret_val is %d, len is %ld and name is %s\n", ret_val, buf->len, buf->name);
+            if (ret_val != strlen(buf->name)){
+                ret_val = -1;
+            }
+            printf("before writing to client\n");
+            // send return code to client
+            if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
+                printf("returning null\n");
+                buf->work = false;
+                return NULL;
+            }
+            printf("written to client\n");
+        }
+        else if (opCode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED){
+            ret_val = tfs_destroy_after_all_closed();
+
+            // send return code to client
+            if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
+                buf->work = false;
+                return NULL;
+            }
+        }
+        printf("setting work false and signal\n");
+        buf->work = false;
+        // pthread_cond_signal(&can_produce[session_id]);
+        pthread_mutex_unlock(&buffers_mutexes[session_id]);
+        printf("unlocking\n");
     }
-    else if (opCode == TFS_OP_CODE_CLOSE){
-        tfs_close(buf->fhandle);
-    }
-    else if (opCode == TFS_OP_CODE_READ){
-        tfs_read(buf->fhandle, buf->name, buf->len);
-    }
-    else if (opCode == TFS_OP_CODE_WRITE){
-        tfs_write(buf->fhandle, buf->name, buf->len);
-    }
-    else if (opCode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED){
-        tfs_destroy_after_all_closed();
-    }
-    pthread_cond_signal(&can_produce[session_id]);
-    pthread_mutex_lock(&buffers_mutexes[session_id]);
-    return NULL;
 }
+
+// se nao for possivel escrever, descobrir qual erro está a acontecer
+// se for do pipe, fechar pipe
+// se for do signal, tentar outra vez
