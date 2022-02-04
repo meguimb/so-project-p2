@@ -463,7 +463,7 @@ int do_op_close(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_
 }
 
 int do_op_shutdown_after_all(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]){
-    int session_id, pipe_client;
+    int session_id;
 
     // read session_id from pipe
     session_id = read_int(pipe_server, -1);
@@ -471,7 +471,6 @@ int do_op_shutdown_after_all(int pipe_server, ClientInfo *clients [S], InputBuff
 
     // geting session info
     ClientInfo *c = clients[session_id];
-    pipe_client = c->client_pipe;
 
     // read parameters and put parameters on buffer
     InputBuffer *buf = consumer_inputs[session_id];
