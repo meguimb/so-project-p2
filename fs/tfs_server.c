@@ -47,7 +47,7 @@ int do_op_read(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_i
 int do_op_open(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]);
 int do_op_write(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]);
 int do_op_close(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]);
-int do_tfs_shutdown_after_all(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]);
+int do_op_shutdown_after_all(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]);
 
 
 // Global Variables
@@ -92,16 +92,16 @@ int main(int argc, char **argv) {
     // make initializations and start threads
     for (int i = 0; i < S; i++){
         consumer_inputs[i] = (InputBuffer *) malloc(sizeof(InputBuffer));
+        consumer_inputs[i]->name = NULL;
         consumer_inputs[i]->work = false;
         consumer_inputs[i]->session_id = i;
         clients[i] = NULL;
+        pthread_create(&tasks[i], NULL, execute, consumer_inputs[i]);
         pthread_cond_init(&can_work[i], NULL);
         pthread_mutex_init(&buffers_mutexes[i], NULL);
     }
     pthread_mutex_init(&session_table_mutex, NULL);
-    for (int i = 0; i < S; i++){
-        pthread_create(&tasks[i], NULL, execute, consumer_inputs[i]);
-    }
+
 
     // start server
     while(true && open_server==1) {
@@ -128,7 +128,9 @@ int main(int argc, char **argv) {
            do_op_close(pipe_server, clients, consumer_inputs);
         }
         else if (opCode == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED){
-            do_tfs_shutdown_after_all(pipe_server, clients, consumer_inputs);
+            do_op_shutdown_after_all(pipe_server, clients, consumer_inputs);
+            // free'ing all memory allocated
+            free_mem(consumer_inputs, clients);
             printf("Shutting down TecnicoFS server.\n");
             return 0;
         }
@@ -197,9 +199,13 @@ void *execute(void *args){
             if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
                 buf->work = false;
                if (error_check(buf->client->client_pipe) == -2){
+                    free(buf->name);
+                    buf->name = NULL;
                     return NULL;
                 }
             }
+            free(buf->name);
+            buf->name = NULL;
         }
         else if (opCode == TFS_OP_CODE_CLOSE){
             ret_val = tfs_close(buf->fhandle);
@@ -220,7 +226,6 @@ void *execute(void *args){
             if (ret_val != strlen(text_read)){
                 ret_val = -1;
             }
-
             if (write(buf->client->client_pipe, &ret_val, sizeof(int)) > 0 && ret_val != -1){
                 if (write(buf->client->client_pipe, text_read, (size_t) ret_val) < 0){
                     buf->work = false;
@@ -256,10 +261,11 @@ void *execute(void *args){
             if (write(buf->client->client_pipe, &ret_val, sizeof(int)) < 0){
                 buf->work = false;
                 if (error_check(buf->client->client_pipe) == -2){
-                    
                     return NULL;
                 }
             }
+            // closing client pipe
+            close(buf->client->client_pipe);
         }
         buf->work = false;
         pthread_mutex_unlock(&buffers_mutexes[session_id]);
@@ -347,7 +353,7 @@ int do_op_unmount(int pipe_server, ClientInfo *clients [S]){
 
     ClientInfo *c = clients[session_id];
     pipe_client = c->client_pipe;
-    free(clients[session_id]);
+    
     if (write(pipe_client, &ret_val, sizeof(int)) < 0){
         close(pipe_client);
         return -1;
@@ -456,7 +462,7 @@ int do_op_close(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_
     return 0;
 }
 
-int do_tfs_shutdown_after_all(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]){
+int do_op_shutdown_after_all(int pipe_server, ClientInfo *clients [S], InputBuffer *consumer_inputs[S]){
     int session_id, pipe_client;
 
     // read session_id from pipe
@@ -476,12 +482,8 @@ int do_tfs_shutdown_after_all(int pipe_server, ClientInfo *clients [S], InputBuf
     // pthread signal
     pthread_cond_signal(&can_work[session_id]);
     pthread_mutex_unlock(&buffers_mutexes[session_id]);
-
-    // free'ing all memory allocated
-    free_mem(consumer_inputs, clients);
-
-    // closing client pipe
-    close(pipe_client);
+    
+    // close pipe server
     close(pipe_server);
     return 0;
 }
