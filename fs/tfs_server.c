@@ -95,12 +95,13 @@ int main(int argc, char **argv) {
         consumer_inputs[i]->work = false;
         consumer_inputs[i]->session_id = i;
         clients[i] = NULL;
-        pthread_create(&tasks[i], NULL, execute, consumer_inputs[i]);
         pthread_cond_init(&can_work[i], NULL);
         pthread_mutex_init(&buffers_mutexes[i], NULL);
     }
     pthread_mutex_init(&session_table_mutex, NULL);
-
+    for (int i = 0; i < S; i++){
+        pthread_create(&tasks[i], NULL, execute, consumer_inputs[i]);
+    }
 
     // start server
     while(true && open_server==1) {
@@ -294,6 +295,9 @@ int find_free_session(int table [S]){
 
 int free_mem(InputBuffer *consumer_inputs [S], ClientInfo *clients [S]){
     for (int i = 0; i < S; i++){
+        if (consumer_inputs[i]->name != NULL){
+            free(consumer_inputs[i]->name);
+        }
         free(consumer_inputs[i]);
         if (clients[i] != NULL){
             free(clients[i]);
