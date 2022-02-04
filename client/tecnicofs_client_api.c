@@ -60,6 +60,7 @@ int tfs_unmount() {
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
+    free(send_req_str);
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return -1;
@@ -165,6 +166,7 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
     if (write(pipe_server, send_req_str+sizeof(size_t), size) < 0) {
         return -1;
     }
+    free(send_req_str);
     pipe_client = open(_client_pipe_path, O_RDONLY);
     if (pipe_client == -1) {
         return (ssize_t) -1;
