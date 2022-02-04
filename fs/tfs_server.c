@@ -40,12 +40,14 @@ int clean_pipe(int pipe_server);
 void *execute(void *args);
 int error_check(int client_pipe);
 int find_free_session(int table [S]);
+int free_mem(InputBuffer *consumer_inputs [S], ClientInfo *clients [S]);
 
 // Global Variables
 static pthread_mutex_t buffers_mutexes [S];
 static pthread_cond_t can_consume [S];
 static pthread_cond_t can_produce [S];
 static pthread_t tasks[S];
+static pthread_mutex_t session_table_mutex;
 static int open_server = 1;
 static int free_sessions[S] = {FREE};
 
@@ -88,12 +90,13 @@ int main(int argc, char **argv) {
         consumer_inputs[i] = (InputBuffer *) malloc(sizeof(InputBuffer));
         consumer_inputs[i]->work = false;
         consumer_inputs[i]->session_id = i;
+        clients[i] = NULL;
         pthread_create(&tasks[i], NULL, execute, consumer_inputs[i]);
         pthread_cond_init(&can_produce[i], NULL);
         pthread_cond_init(&can_consume[i], NULL);
         pthread_mutex_init(&buffers_mutexes[i], NULL);
-        clients[i] = malloc(sizeof(ClientInfo *));
     }
+    pthread_mutex_init(&session_table_mutex, NULL);
 
     while(true && open_server==1) {
         char opCode;
@@ -119,6 +122,7 @@ int main(int argc, char **argv) {
             }
             else{
                 pthread_mutex_lock(&buffers_mutexes[session_id]);
+                clients[session_id] = malloc(sizeof(ClientInfo *));
                 ClientInfo *c = clients[session_id];
                 c->session_id = session_id;
                 // opening client pipe and sending client new session id
@@ -132,6 +136,10 @@ int main(int argc, char **argv) {
         else if (opCode == TFS_OP_CODE_UNMOUNT) {
             int pipe_client, session_id = read_int(pipe_server, -1);
             ret_val = 1;
+            pthread_mutex_lock(&session_table_mutex);
+            free_sessions[session_id] = FREE;
+            pthread_mutex_unlock(&session_table_mutex);
+
             ClientInfo *c = clients[session_id];
             pipe_client = c->client_pipe;
             free(clients[session_id]);
@@ -250,10 +258,13 @@ int main(int argc, char **argv) {
             pthread_cond_signal(&can_consume[session_id]);
             pthread_mutex_unlock(&buffers_mutexes[session_id]);
 
-            printf("Shutting down TecnicoFS server.\n");
+            // free'ing all memory allocated
+            free_mem(consumer_inputs, clients);
+
             // closing client pipe
             close(pipe_client);
             close(pipe_server);
+            printf("Shutting down TecnicoFS server.\n");
             return 0;
         }
     }
@@ -410,11 +421,24 @@ int error_check(int client_pipe){
 }
 
 int find_free_session(int table [S]){
+    pthread_mutex_lock(&session_table_mutex);
     for (int i = 0; i < S; i++){
         if (table[i] == FREE){
             table[i] = TAKEN;
+            pthread_mutex_unlock(&session_table_mutex);
             return i;
         }
     }
+    pthread_mutex_unlock(&session_table_mutex);
     return -1;
+}
+
+int free_mem(InputBuffer *consumer_inputs [S], ClientInfo *clients [S]){
+    for (int i = 0; i < S; i++){
+        free(consumer_inputs[i]);
+        if (clients[i] != NULL){
+            free(clients[i]);
+        }
+    }
+    return 0;
 }
